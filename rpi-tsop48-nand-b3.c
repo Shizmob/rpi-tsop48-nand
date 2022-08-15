@@ -1,5 +1,5 @@
 /*
-    Raspberry Pi / 
+    Raspberry Pi /
 
     RasPS3 : GPIO NAND flasher
     (made out of "360-Clip based 8-bit NAND reader" by pharos)
@@ -20,6 +20,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -31,17 +32,31 @@
 
 // #define DEBUG 1
 
+// 1: Model B+
+// 2: Model 2B
+// 3: Model 3B
+// 4: Model 4B
+#ifndef RPI_MODEL
+#define RPI_MODEL  4
+#endif
+
 #define PAGE_SIZE 2112 // (2K + 64)Byte
 #define BLOCK_SIZE 135168 // (2K + 64)Byte
 #define MAX_WAIT_READ_BUSY	1000000
 
 /* For Raspberry B+ :*/
-// #define BCM2708_PERI_BASE	0x20000000
-// #define GPIO_BASE	 	(BCM2708_PERI_BASE + 0x200000)
-
+#if RPI_MODEL == 1
+#define BCM2708_PERI_BASE        0x20000000
+#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000)
+#elif RPI_MODEL == 2 || RPI_MODEL == 3
 /* For Raspberry 2B and 3B :*/
 #define BCM2736_PERI_BASE        0x3F000000
-#define GPIO_BASE                (BCM2736_PERI_BASE + 0x200000) /* GPIO controller */
+#define GPIO_BASE                (BCM2736_PERI_BASE + 0x200000)
+/* For Raspberry 4B */
+#elif RPI_MODEL == 4
+#define BCM2711_PERI_BASE        0xFE000000
+#define GPIO_BASE                (BCM2711_PERI_BASE + 0x200000)
+#endif
 
 #define N_WRITE_PROTECT		2 // pulled up by RPi, this is useful
 #define N_READ_BUSY		3 // pulled up by RPi, this is also useful
@@ -61,7 +76,7 @@ int data_to_gpio_map[8] = { 23, 24, 25, 8, 7, 10, 9, 11 }; // 23 is NAND IO0, et
 
 volatile unsigned int *gpio;
 
-inline void INP_GPIO(int g)
+static inline void INP_GPIO(int g)
 {
 #ifdef DEBUG
 	printf("setting direction of GPIO#%d to input\n", g);
@@ -69,7 +84,7 @@ inline void INP_GPIO(int g)
 	(*(gpio+((g)/10)) &= ~(7<<(((g)%10)*3)));
 }
 
-inline void OUT_GPIO(int g)
+static inline void OUT_GPIO(int g)
 {
 	INP_GPIO(g);
 #ifdef DEBUG
@@ -78,7 +93,7 @@ inline void OUT_GPIO(int g)
 	*(gpio+((g)/10)) |= (1<<(((g)%10)*3));
 }
 
-inline void GPIO_SET_1(int g)
+static inline void GPIO_SET_1(int g)
 {
 #ifdef DEBUG
 	printf("setting GPIO#%d to 1\n", g);
@@ -86,7 +101,7 @@ inline void GPIO_SET_1(int g)
 	*(gpio +  7)  = 1 << g;
 }
 
-inline void GPIO_SET_0(int g)
+static inline void GPIO_SET_0(int g)
 {
 #ifdef DEBUG
 	printf("setting GPIO#%d to 0\n", g);
@@ -94,7 +109,7 @@ inline void GPIO_SET_0(int g)
 	*(gpio + 10)  = 1 << g;
 }
 
-inline int GPIO_READ(int g)
+static inline int GPIO_READ(int g)
 {
 	int x = (*(gpio + 13) & (1 << g)) >> g;
 #ifdef DEBUG
@@ -103,7 +118,7 @@ inline int GPIO_READ(int g)
 	return x;
 }
 
-inline void set_data_direction_in(void)
+static inline void set_data_direction_in(void)
 {
 	int i;
 #ifdef DEBUG
@@ -113,7 +128,7 @@ inline void set_data_direction_in(void)
 		INP_GPIO(data_to_gpio_map[i]);
 }
 
-inline void set_data_direction_out(void)
+static inline void set_data_direction_out(void)
 {
 	int i;
 #ifdef DEBUG
@@ -123,7 +138,7 @@ inline void set_data_direction_out(void)
 		OUT_GPIO(data_to_gpio_map[i]);
 }
 
-inline int GPIO_DATA8_IN(void)
+static inline int GPIO_DATA8_IN(void)
 {
 	int i, data;
 	for (i = data = 0; i < 8; i++, data = data << 1) {
@@ -136,7 +151,7 @@ inline int GPIO_DATA8_IN(void)
 	return data;
 }
 
-inline void GPIO_DATA8_OUT(int data)
+static inline void GPIO_DATA8_OUT(int data)
 {
 	int i;
 #ifdef DEBUG
@@ -151,134 +166,13 @@ inline void GPIO_DATA8_OUT(int data)
 }
 
 int delay = 1;
-int shortpause()
+void shortpause()
 {
 	int i;
 	volatile static int dontcare = 0;
 	for (i = 0; i < delay; i++) {
 		dontcare++;
 	}
-}
-
-// void shortpause()
-// {
-//     struct timespec ts;
-//     ts.tv_sec = delay / 1000;
-//     ts.tv_nsec = (delay % 1000) * 1000000;
-//     nanosleep(&ts, NULL);
-// }
-
-int main(int argc, char **argv)
-{ 
-	int mem_fd;
-
-	printf("\nRasPS3 (b3)\na Raspberry GPIO flasher for PS3 NANDs, by littlebalup\n\n");
-
-	if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC)) < 0) {
-		perror("open /dev/mem, are you root?");
-		return -1;
-	}
-
-	if ((gpio = (volatile unsigned int *) mmap((caddr_t) 0x13370000, 4096, PROT_READ|PROT_WRITE,
-						MAP_SHARED|MAP_FIXED, mem_fd, GPIO_BASE)) == MAP_FAILED) {
-		perror("mmap GPIO_BASE");
-		close(mem_fd);
-		return -1;
-	}
-
-	INP_GPIO(N_READ_BUSY);
-
-	OUT_GPIO(N_WRITE_PROTECT);
-	GPIO_SET_1(N_WRITE_PROTECT);
-
-	OUT_GPIO(N_READ_ENABLE);
-	GPIO_SET_1(N_READ_ENABLE);
-
-	OUT_GPIO(N_WRITE_ENABLE);
-	GPIO_SET_1(N_WRITE_ENABLE);
-
-	OUT_GPIO(COMMAND_LATCH_ENABLE);
-	GPIO_SET_0(COMMAND_LATCH_ENABLE);
-
-	OUT_GPIO(ADDRESS_LATCH_ENABLE);
-	GPIO_SET_0(ADDRESS_LATCH_ENABLE);
-
-	OUT_GPIO(N_CHIP_ENABLE);
-	GPIO_SET_0(N_CHIP_ENABLE);
-
-	if (argc < 3) {
-usage:
-		GPIO_SET_1(N_CHIP_ENABLE);
-		printf("usage: sudo %s <delay> <command> ...\n\n" \
-		    " <delay> used to slow down operations (50 should work, increase if bad reads)\n\n" \
-		    "Commands:\n" \
-		    " read_id (no arguments)                        : read and decrypt chip ID\n" \
-		    " read_full <page #> <# of pages> <output file> : read N pages including spare\n" \
-		    " read_data <page #> <# of pages> <output file> : read N pages, discard spare\n" \
-		    " write_full <page #> <# of pages> <input file> : write N pages, including spare\n" \
-		    " write_data <page #> <# of pages> <input file> : write N pages, discard spare\n" \
-		    " erase_blocks <block number> <# of blocks>     : erase N blocks\n\n" \
-		    "Notes:\n" \
-		    " This program assumes PAGE_SIZE == %d\n" \
-		    " Run as root (sudo) required (for /dev/mem access)\n\n",
-			argv[0], PAGE_SIZE);
-		close(mem_fd);
-		return -1;
-	}
-
-	//hide cursor
-	// printf("\e[?25l");
-	// fflush(stdout);
-
-	delay = atoi(argv[1]);
-	// if (delay < 20) {
-	// 	printf("delay must be >= 20\n");
-	// 	return -1;
-	// }
-
-	if (strcmp(argv[2], "read_id") == 0) {
-		return read_id(NULL);
-	}
-
-	if (strcmp(argv[2], "read_full") == 0) {
-		if (argc != 6) goto usage;
-		if (atoi(argv[4]) <= 0) {
-			printf("# of pages must be > 0\n");
-			return -1;
-		}
-		return read_pages(atoi(argv[3]), atoi(argv[4]), argv[5], 1);
-	}
-
-	if (strcmp(argv[2], "read_data") == 0) {
-		if (argc != 6) goto usage;
-		if (atoi(argv[4]) <= 0) {
-			printf("# of pages must be > 0\n");
-			return -1;
-		}
-		return read_pages(atoi(argv[3]), atoi(argv[4]), argv[5], 0);
-	}
-
-	if (strcmp(argv[2], "write_full") == 0) {
-		if (argc != 6) goto usage;
-		if (atoi(argv[4]) <= 0) {
-			printf("# of pages must be > 0\n");
-			return -1;
-		}
-		return write_pages(atoi(argv[3]), atoi(argv[4]), argv[5]);
-	}
-
-	if (strcmp(argv[2], "erase_blocks") == 0) {
-		if (argc != 5) goto usage;
-		if (atoi(argv[4]) <= 0) {
-			printf("# of blocks must be > 0\n");
-			return -1;
-		}
-		return erase_blocks(atoi(argv[3]), atoi(argv[4]));
-	}
-
-	printf("unknown command '%s'\n", argv[2]);
-	goto usage;
-	return 0;
 }
 
 void error_msg(char *msg)
@@ -291,7 +185,7 @@ void print_id(unsigned char id[5])
 {
 	unsigned int i, bit, page_size, ras_size, orga, plane_number;
 	unsigned long block_size, plane_size, nand_size, nandras_size;
-	unsigned char maker[16], device[16], serial_access[20];
+	char maker[16], device[16], serial_access[20];
 	unsigned *thirdbits = (unsigned*)malloc(sizeof(unsigned) * 8);
 	unsigned *fourthbits = (unsigned*)malloc(sizeof(unsigned) * 8);
 	unsigned *fifthbits = (unsigned*)malloc(sizeof(unsigned) * 8);
@@ -307,6 +201,7 @@ void print_id(unsigned char id[5])
  			switch(id[1]) {
  				case 0xA1: strcpy(device, "K9F1G08R0A"); break;
  				case 0xD5: strcpy(device, "K9GAG08U0M"); break;
+				case 0xDC: strcpy(device, "K9F4G08U0A"); break;
  				case 0xF1: strcpy(device, "K9F1G08U0A/B"); break;
  				default: strcpy(device, "unknown");
  			}
@@ -402,20 +297,20 @@ void print_id(unsigned char id[5])
     printf(" (0x%02X)\n", id[4]);
 
 	printf("\n");
-	printf("Page size:          %d bytes\n", page_size);
-	printf("Block size:         %d bytes\n", block_size);
-	printf("RAS (/512 bytes):   %d bytes\n", ras_size);
+	printf("Page size:          %u bytes\n", page_size);
+	printf("Block size:         %lu bytes\n", block_size);
+	printf("RAS (/512 bytes):   %u bytes\n", ras_size);
 	// printf("RAS (per page):  %d bytes\n", ras_size * page_size / 512);
 	// printf("RAS (per block): %d bytes\n", ras_size * block_size / 512);
 	printf("Organisation:       %d bit\n", orga);
 	printf("Serial access:      %s\n", serial_access);
 	printf("Number of planes:   %d\n", plane_number);
-	printf("Plane size:         %d bytes\n", plane_size);
+	printf("Plane size:         %lu bytes\n", plane_size);
 	printf("\n");
-	printf("NAND size:          %d MB\n", nand_size / (1024 * 1024));
-	printf("NAND size + RAS:    %d MB\n", nandras_size / (1024 * 1024));
-	printf("Number of blocks:   %d\n", nand_size / block_size);
-	printf("Number of pages:    %d\n", nand_size / page_size);
+	printf("NAND size:          %lu MB\n", nand_size / (1024 * 1024));
+	printf("NAND size + RAS:    %lu MB\n", nandras_size / (1024 * 1024));
+	printf("Number of blocks:   %lu\n", nand_size / block_size);
+	printf("Number of pages:    %lu\n", nand_size / page_size);
 }
 
 int read_id(unsigned char id[5])
@@ -460,7 +355,7 @@ int read_id(unsigned char id[5])
 	return 0;
 }
 
-inline int page_to_address(int page, int address_byte_index)
+static inline int page_to_address(int page, int address_byte_index)
 {
 	switch(address_byte_index) {
 	case 2:
@@ -661,8 +556,8 @@ int read_pages(int first_page_number, int number_of_pages, char *outfile, int wr
 	int page, page_no, block_no, page_nbr, percent, i, n, retry_count;
 	unsigned char id[5], id2[5];
 	unsigned char buf[PAGE_SIZE * 2];
-	FILE *badlog, *f = fopen(outfile, "w+");
-	if (f == NULL) {
+	FILE *badlog = NULL, *f;
+	if ((f = fopen(outfile, "w+")) == NULL) {
 		perror("fopen output file");
 		return -1;
 	}
@@ -774,82 +669,19 @@ int read_pages(int first_page_number, int number_of_pages, char *outfile, int wr
 		}
 		retry_count = 0;
 	}
-	fcloseall();
+	if (f)
+		fclose(f);
+	if (badlog)
+		fclose(badlog);
 	clock_t end = clock();
 	printf("\n\nReading done in %f seconds\n", (float)(end - start) / CLOCKS_PER_SEC);
 
+	return 0;
 	//show cursor
 	// printf("\e[?25h");
 	// fflush(stdout) ;
 }
 
-
-/*int read_pages(int first_page_number, int number_of_pages, char *outfile, int write_spare)
-{
-	int page, block_no, page_nbr, percent, i;
-	unsigned char buf[PAGE_SIZE], id[5], id2[5];;
-	FILE *f = fopen(outfile, "w+");
-	if (f == NULL) {
-		perror("fopen output file");
-		return -1;
-	}
-	if (GPIO_READ(N_READ_BUSY) == 0) {
-		error_msg("N_READ_BUSY should be 1 (pulled up), but reads as 0. make sure the NAND is powered on");
-		return -1;
-	}
-
-	if (read_id(id) < 0)
-		return -1;
-	print_id(id);
-	printf("if this ID is incorrect, press Ctrl-C NOW to abort (3s timeout)\n");
-	sleep(3);
-
-	printf("\nStart reading...\n\n");
-	clock_t start = clock();
-
-
-	for (page = first_page_number; page < first_page_number + number_of_pages; page++) {
-
-		// printf("page = %d, n = %d\n",page, n);
-
-		// page_nbr = page - first_page_number + 1;
-		// percent = (100 * page_nbr) / number_of_pages;
-		// block_no = page / 64;
-		// printf("Reading page n° %d in block n° %d (page %d of %d), %d%%\n", page, block_no, page_nbr, number_of_pages, percent);
-		printf("\nReading page n° %d\n", page);
-
-		send_read_command(page);
-		while (GPIO_READ(N_READ_BUSY) == 0) {
-			// printf("Busy\n");
-			shortpause();
-		}
-		set_data_direction_in();
-		for (i = 0; i < PAGE_SIZE; i++) {
-			GPIO_SET_0(N_READ_ENABLE);
-			shortpause();
-			buf[i] = GPIO_DATA8_IN(); //
-			shortpause();
-			GPIO_SET_1(N_READ_ENABLE);
-			shortpause();
-		}
-		if (write_spare) {
-			if (fwrite(buf, PAGE_SIZE, 1, f) != 1) {
-				perror("fwrite");
-				return -1;
-			}
-		}
-		else {
-			if (fwrite(buf, 512 * (PAGE_SIZE / 512), 1, f) != 1) {
-				perror("fwrite");
-				return -1;
-			}
-		}
-	}
-	fcloseall();
-	clock_t end = clock();
-	printf("\nReading done in %f seconds\n", (float)(end - start) / CLOCKS_PER_SEC);
-}
-*/
 int write_pages(int first_page_number, int number_of_pages, char *infile)
 {
 	int page, block_no, page_nbr, percent, retry_count;
@@ -919,13 +751,12 @@ int write_pages(int first_page_number, int number_of_pages, char *infile)
 		retry_count = 0;
 	}
 
-
-
-
-
-	fcloseall();
+	if (f)
+		fclose(f);
 	clock_t end = clock();
 	printf("\nWrite done in %f seconds\n", (float)(end - start) / CLOCKS_PER_SEC);
+
+	return 0;
 }
 
 int erase_blocks(int first_block_number, int number_of_blocks)
@@ -945,7 +776,7 @@ int erase_blocks(int first_block_number, int number_of_blocks)
 	for (retry_count = 0, block = first_block_number; block < (first_block_number + number_of_blocks); block++) {
 
 	  retry_all:
-			
+
 		block_nbr = block - first_block_number + 1;
 		percent = (100 * block_nbr) / number_of_blocks;
 
@@ -984,4 +815,122 @@ int erase_blocks(int first_block_number, int number_of_blocks)
 	clock_t end = clock();
 	printf("\nErasing done in %f seconds\n", (float)(end - start) / CLOCKS_PER_SEC);
 
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	int mem_fd;
+
+	printf("\nRasPS3 (b3)\na Raspberry GPIO flasher for PS3 NANDs, by littlebalup\n\n");
+
+	size_t gpio_base;
+	if ((mem_fd = open("/dev/gpiomem", O_RDWR|O_SYNC)) >= 0) {
+		gpio_base = 0;
+	} else if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC)) >= 0) {
+		gpio_base = GPIO_BASE;
+	} else {
+		perror("open /dev/gpiomem and /dev/mem, are you root?");
+		return -1;
+	}
+	if ((gpio = (volatile unsigned int *) mmap((caddr_t) 0x13370000, 4096, PROT_READ|PROT_WRITE,
+						MAP_SHARED|MAP_FIXED, mem_fd, 0)) == MAP_FAILED) {
+		perror("mmap GPIO_BASE");
+		close(mem_fd);
+		return -1;
+	}
+
+	INP_GPIO(N_READ_BUSY);
+
+	OUT_GPIO(N_WRITE_PROTECT);
+	GPIO_SET_1(N_WRITE_PROTECT);
+
+	OUT_GPIO(N_READ_ENABLE);
+	GPIO_SET_1(N_READ_ENABLE);
+
+	OUT_GPIO(N_WRITE_ENABLE);
+	GPIO_SET_1(N_WRITE_ENABLE);
+
+	OUT_GPIO(COMMAND_LATCH_ENABLE);
+	GPIO_SET_0(COMMAND_LATCH_ENABLE);
+
+	OUT_GPIO(ADDRESS_LATCH_ENABLE);
+	GPIO_SET_0(ADDRESS_LATCH_ENABLE);
+
+	OUT_GPIO(N_CHIP_ENABLE);
+	GPIO_SET_0(N_CHIP_ENABLE);
+
+	if (argc < 3) {
+usage:
+		GPIO_SET_1(N_CHIP_ENABLE);
+		printf("usage: sudo %s <delay> <command> ...\n\n" \
+		    " <delay> used to slow down operations (50 should work, increase if bad reads)\n\n" \
+		    "Commands:\n" \
+		    " read_id (no arguments)                        : read and decrypt chip ID\n" \
+		    " read_full <page #> <# of pages> <output file> : read N pages including spare\n" \
+		    " read_data <page #> <# of pages> <output file> : read N pages, discard spare\n" \
+		    " write_full <page #> <# of pages> <input file> : write N pages, including spare\n" \
+		    " write_data <page #> <# of pages> <input file> : write N pages, discard spare\n" \
+		    " erase_blocks <block number> <# of blocks>     : erase N blocks\n\n" \
+		    "Notes:\n" \
+		    " This program assumes PAGE_SIZE == %d\n" \
+		    " Run as root (sudo) required (for /dev/mem access)\n\n",
+			argv[0], PAGE_SIZE);
+		close(mem_fd);
+		return -1;
+	}
+
+	//hide cursor
+	// printf("\e[?25l");
+	// fflush(stdout);
+
+	delay = atoi(argv[1]);
+	// if (delay < 20) {
+	// 	printf("delay must be >= 20\n");
+	// 	return -1;
+	// }
+
+	if (strcmp(argv[2], "read_id") == 0) {
+		return read_id(NULL);
+	}
+
+	if (strcmp(argv[2], "read_full") == 0) {
+		if (argc != 6) goto usage;
+		if (atoi(argv[4]) <= 0) {
+			printf("# of pages must be > 0\n");
+			return -1;
+		}
+		return read_pages(atoi(argv[3]), atoi(argv[4]), argv[5], 1);
+	}
+
+	if (strcmp(argv[2], "read_data") == 0) {
+		if (argc != 6) goto usage;
+		if (atoi(argv[4]) <= 0) {
+			printf("# of pages must be > 0\n");
+			return -1;
+		}
+		return read_pages(atoi(argv[3]), atoi(argv[4]), argv[5], 0);
+	}
+
+	if (strcmp(argv[2], "write_full") == 0) {
+		if (argc != 6) goto usage;
+		if (atoi(argv[4]) <= 0) {
+			printf("# of pages must be > 0\n");
+			return -1;
+		}
+		return write_pages(atoi(argv[3]), atoi(argv[4]), argv[5]);
+	}
+
+	if (strcmp(argv[2], "erase_blocks") == 0) {
+		if (argc != 5) goto usage;
+		if (atoi(argv[4]) <= 0) {
+			printf("# of blocks must be > 0\n");
+			return -1;
+		}
+		return erase_blocks(atoi(argv[3]), atoi(argv[4]));
+	}
+
+	printf("unknown command '%s'\n", argv[2]);
+	goto usage;
+	return 0;
 }
